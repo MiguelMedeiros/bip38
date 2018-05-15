@@ -41,7 +41,7 @@ function getAddress (d, compressed) {
   return bs58check.encode(payload)
 }
 
-function encryptRaw (buffer, compressed, passphrase, progressCallback, scryptParams) {
+function encryptRawAsync (buffer, compressed, passphrase, progressCallback, scryptParams, doneCallback) {
   if (buffer.length !== 32) throw new Error('Invalid private key length')
   scryptParams = scryptParams || SCRYPT_PARAMS
 
@@ -54,34 +54,43 @@ function encryptRaw (buffer, compressed, passphrase, progressCallback, scryptPar
   var r = scryptParams.r
   var p = scryptParams.p
 
-  var scryptBuf = scrypt(secret, salt, N, r, p, 64, progressCallback)
-  var derivedHalf1 = scryptBuf.slice(0, 32)
-  var derivedHalf2 = scryptBuf.slice(32, 64)
-
-  var xorBuf = xor(derivedHalf1, buffer)
-  var cipher = aes.createCipheriv('aes-256-ecb', derivedHalf2, NULL)
-  cipher.setAutoPadding(false)
-  cipher.end(xorBuf)
-
-  var cipherText = cipher.read()
-
-  // 0x01 | 0x42 | flagByte | salt (4) | cipherText (32)
-  var result = Buffer.allocUnsafe(7 + 32)
-  result.writeUInt8(0x01, 0)
-  result.writeUInt8(0x42, 1)
-  result.writeUInt8(compressed ? 0xe0 : 0xc0, 2)
-  salt.copy(result, 3)
-  cipherText.copy(result, 7)
-
-  return result
+  scryptAsync(secret, salt, N, r, p, 64, progressCallback, function(err, scryptBuf) {
+  	if (err) {
+  		doneCallback(err);
+  		return;
+  	}
+  
+	  var derivedHalf1 = scryptBuf.slice(0, 32)
+	  var derivedHalf2 = scryptBuf.slice(32, 64)
+	
+	  var xorBuf = xor(derivedHalf1, buffer)
+	  var cipher = aes.createCipheriv('aes-256-ecb', derivedHalf2, NULL)
+	  cipher.setAutoPadding(false)
+	  cipher.end(xorBuf)
+	
+	  var cipherText = cipher.read()
+	
+	  // 0x01 | 0x42 | flagByte | salt (4) | cipherText (32)
+	  var result = Buffer.allocUnsafe(7 + 32)
+	  result.writeUInt8(0x01, 0)
+	  result.writeUInt8(0x42, 1)
+	  result.writeUInt8(compressed ? 0xe0 : 0xc0, 2)
+	  salt.copy(result, 3)
+	  cipherText.copy(result, 7)
+	
+	  doneCallback(null, result);
+  });
 }
 
-function encrypt (buffer, compressed, passphrase, progressCallback, scryptParams) {
-  return bs58check.encode(encryptRaw(buffer, compressed, passphrase, progressCallback, scryptParams))
+function encryptAsync (buffer, compressed, passphrase, progressCallback, scryptParams, doneCallback) {
+	encryptRawAsync(buffer, compressed, passphrase, progressCallback, scryptParams, function(err, result) {
+		if (err) doneCallback(err);
+		else doneCallback(null, bs58check.encode(result));
+	});
 }
 
-// some of the techniques borrowed from: https://github.com/pointbiz/bitaddress.org
-function decryptRaw (buffer, passphrase, progressCallback, scryptParams) {
+//some of the techniques borrowed from: https://github.com/pointbiz/bitaddress.org
+function decryptRawAsync (buffer, passphrase, progressCallback, scryptParams, doneCallback) {
   // 39 bytes: 2 bytes prefix, 37 bytes payload
   if (buffer.length !== 39) throw new Error('Invalid BIP38 data length')
   if (buffer.readUInt8(0) !== 0x01) throw new Error('Invalid BIP38 prefix')
@@ -89,7 +98,10 @@ function decryptRaw (buffer, passphrase, progressCallback, scryptParams) {
 
   // check if BIP38 EC multiply
   var type = buffer.readUInt8(1)
-  if (type === 0x43) return decryptECMult(buffer, passphrase, progressCallback, scryptParams)
+  if (type === 0x43) {
+  	decryptECMultAsync(buffer, passphrase, progressCallback, scryptParams, doneCallback)
+  	return;
+  }
   if (type !== 0x42) throw new Error('Invalid BIP38 type')
 
   passphrase = Buffer.from(passphrase, 'utf8')
@@ -103,35 +115,44 @@ function decryptRaw (buffer, passphrase, progressCallback, scryptParams) {
   var p = scryptParams.p
 
   var salt = buffer.slice(3, 7)
-  var scryptBuf = scrypt(passphrase, salt, N, r, p, 64, progressCallback)
-  var derivedHalf1 = scryptBuf.slice(0, 32)
-  var derivedHalf2 = scryptBuf.slice(32, 64)
+  scryptAsync(passphrase, salt, N, r, p, 64, progressCallback, function(err, scryptBuf) {
+  	if (err) {
+  		doneCallback(err);
+  		return;
+  	}
 
-  var privKeyBuf = buffer.slice(7, 7 + 32)
-  var decipher = aes.createDecipheriv('aes-256-ecb', derivedHalf2, NULL)
-  decipher.setAutoPadding(false)
-  decipher.end(privKeyBuf)
-
-  var plainText = decipher.read()
-  var privateKey = xor(derivedHalf1, plainText)
-
-  // verify salt matches address
-  var d = BigInteger.fromBuffer(privateKey)
-  var address = getAddress(d, compressed)
-  var checksum = hash256(address).slice(0, 4)
-  assert.deepEqual(salt, checksum)
-
-  return {
-    privateKey: privateKey,
-    compressed: compressed
-  }
+	  var derivedHalf1 = scryptBuf.slice(0, 32)
+	  var derivedHalf2 = scryptBuf.slice(32, 64)
+	
+	  var privKeyBuf = buffer.slice(7, 7 + 32)
+	  var decipher = aes.createDecipheriv('aes-256-ecb', derivedHalf2, NULL)
+	  decipher.setAutoPadding(false)
+	  decipher.end(privKeyBuf)
+	
+	  var plainText = decipher.read()
+	  var privateKey = xor(derivedHalf1, plainText)
+	
+	  // verify salt matches address
+	  var d = BigInteger.fromBuffer(privateKey)
+	  var address = getAddress(d, compressed)
+	  var checksum = hash256(address).slice(0, 4)
+    try {
+      assert.deepEqual(salt, checksum)
+      doneCallback(null, {
+        privateKey: privateKey,
+        compressed: compressed
+      });
+    } catch (err) {
+    	doneCallback(err);
+    }
+  });
 }
 
-function decrypt (string, passphrase, progressCallback, scryptParams) {
-  return decryptRaw(bs58check.decode(string), passphrase, progressCallback, scryptParams)
+function decryptAsync (string, passphrase, progressCallback, scryptParams, doneCallback) {
+	return decryptRawAsync(bs58check.decode(string), passphrase, progressCallback, scryptParams, doneCallback)
 }
 
-function decryptECMult (buffer, passphrase, progressCallback, scryptParams) {
+function decryptECMultAsync (buffer, passphrase, progressCallback, scryptParams, doneCallback) {
   passphrase = Buffer.from(passphrase, 'utf8')
   buffer = buffer.slice(1) // FIXME: we can avoid this
   scryptParams = scryptParams || SCRYPT_PARAMS
@@ -161,47 +182,59 @@ function decryptECMult (buffer, passphrase, progressCallback, scryptParams) {
   var N = scryptParams.N
   var r = scryptParams.r
   var p = scryptParams.p
-  var preFactor = scrypt(passphrase, ownerSalt, N, r, p, 32, progressCallback)
+  
+  scryptAsync(passphrase, ownerSalt, N, r, p, 32, progressCallback, function(err, preFactor) {
+  	if (err) {
+  		doneCallback(err);
+  		return;
+  	}
+  	
+  	var passFactor
+    if (hasLotSeq) {
+      var hashTarget = Buffer.concat([preFactor, ownerEntropy])
+      passFactor = hash256(hashTarget)
+    } else {
+      passFactor = preFactor
+    }
 
-  var passFactor
-  if (hasLotSeq) {
-    var hashTarget = Buffer.concat([preFactor, ownerEntropy])
-    passFactor = hash256(hashTarget)
-  } else {
-    passFactor = preFactor
-  }
+    var passInt = BigInteger.fromBuffer(passFactor)
+    var passPoint = curve.G.multiply(passInt).getEncoded(true)
 
-  var passInt = BigInteger.fromBuffer(passFactor)
-  var passPoint = curve.G.multiply(passInt).getEncoded(true)
+    scryptAsync(passPoint, Buffer.concat([addressHash, ownerEntropy]), 1024, 1, 1, 64, function(err, seedBPass) {
+      if (err) {
+    		doneCallback(err);
+    		return;
+    	}
+    	
+    	var derivedHalf1 = seedBPass.slice(0, 32)
+      var derivedHalf2 = seedBPass.slice(32, 64)
 
-  var seedBPass = scrypt(passPoint, Buffer.concat([addressHash, ownerEntropy]), 1024, 1, 1, 64)
-  var derivedHalf1 = seedBPass.slice(0, 32)
-  var derivedHalf2 = seedBPass.slice(32, 64)
+      var decipher = aes.createDecipheriv('aes-256-ecb', derivedHalf2, Buffer.alloc(0))
+      decipher.setAutoPadding(false)
+      decipher.end(encryptedPart2)
 
-  var decipher = aes.createDecipheriv('aes-256-ecb', derivedHalf2, Buffer.alloc(0))
-  decipher.setAutoPadding(false)
-  decipher.end(encryptedPart2)
+      var decryptedPart2 = decipher.read()
+      var tmp = xor(decryptedPart2, derivedHalf1.slice(16, 32))
+      var seedBPart2 = tmp.slice(8, 16)
 
-  var decryptedPart2 = decipher.read()
-  var tmp = xor(decryptedPart2, derivedHalf1.slice(16, 32))
-  var seedBPart2 = tmp.slice(8, 16)
+      var decipher2 = aes.createDecipheriv('aes-256-ecb', derivedHalf2, Buffer.alloc(0))
+      decipher2.setAutoPadding(false)
+      decipher2.write(encryptedPart1) // first 8 bytes
+      decipher2.end(tmp.slice(0, 8)) // last 8 bytes
 
-  var decipher2 = aes.createDecipheriv('aes-256-ecb', derivedHalf2, Buffer.alloc(0))
-  decipher2.setAutoPadding(false)
-  decipher2.write(encryptedPart1) // first 8 bytes
-  decipher2.end(tmp.slice(0, 8)) // last 8 bytes
+      var seedBPart1 = xor(decipher2.read(), derivedHalf1.slice(0, 16))
+      var seedB = Buffer.concat([seedBPart1, seedBPart2], 24)
+      var factorB = BigInteger.fromBuffer(hash256(seedB))
 
-  var seedBPart1 = xor(decipher2.read(), derivedHalf1.slice(0, 16))
-  var seedB = Buffer.concat([seedBPart1, seedBPart2], 24)
-  var factorB = BigInteger.fromBuffer(hash256(seedB))
+      // d = passFactor * factorB (mod n)
+      var d = passInt.multiply(factorB).mod(curve.n)
 
-  // d = passFactor * factorB (mod n)
-  var d = passInt.multiply(factorB).mod(curve.n)
-
-  return {
-    privateKey: d.toBuffer(32),
-    compressed: compressed
-  }
+      doneCallback(null, {
+        privateKey: d.toBuffer(32),
+        compressed: compressed
+      });
+    });
+  });
 }
 
 function verify (string) {
@@ -229,10 +262,10 @@ function verify (string) {
 }
 
 module.exports = {
-  decrypt: decrypt,
-  decryptECMult: decryptECMult,
-  decryptRaw: decryptRaw,
-  encrypt: encrypt,
-  encryptRaw: encryptRaw,
+  decryptAsync: decryptAsync,
+  decryptECMultAsync: decryptECMultAsync,
+  decryptRawAsync: decryptRawAsync,
+  encryptAsync: encryptAsync,
+  encryptRawAsync: encryptRawAsync,
   verify: verify
 }
