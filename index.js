@@ -140,6 +140,7 @@ function decryptRawAsync (buffer, passphrase, progressCallback, scryptParams, do
       assert.deepEqual(salt, checksum)
     } catch (err) {
     	doneCallback(err);
+    	return;
     }
     doneCallback(null, {
       privateKey: privateKey,
