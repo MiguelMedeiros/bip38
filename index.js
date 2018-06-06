@@ -54,7 +54,7 @@ function encryptRawAsync (buffer, compressed, passphrase, progressCallback, scry
   var r = scryptParams.r
   var p = scryptParams.p
 
-  scryptAsync(secret, salt, N, r, p, 64, progressCallback, function(err, scryptBuf) {
+  scrypt.scryptAsync(secret, salt, N, r, p, 64, progressCallback, function(err, scryptBuf) {
   	if (err) {
   		doneCallback(err);
   		return;
@@ -115,7 +115,7 @@ function decryptRawAsync (buffer, passphrase, progressCallback, scryptParams, do
   var p = scryptParams.p
 
   var salt = buffer.slice(3, 7)
-  scryptAsync(passphrase, salt, N, r, p, 64, progressCallback, function(err, scryptBuf) {
+  scrypt.scryptAsync(passphrase, salt, N, r, p, 64, progressCallback, function(err, scryptBuf) {
   	if (err) {
   		doneCallback(err);
   		return;
@@ -184,7 +184,7 @@ function decryptECMultAsync (buffer, passphrase, progressCallback, scryptParams,
   var r = scryptParams.r
   var p = scryptParams.p
   
-  scryptAsync(passphrase, ownerSalt, N, r, p, 32, progressCallback, function(err, preFactor) {
+  scrypt.scryptAsync(passphrase, ownerSalt, N, r, p, 32, progressCallback, function(err, preFactor) {
   	if (err) {
   		doneCallback(err);
   		return;
@@ -201,7 +201,7 @@ function decryptECMultAsync (buffer, passphrase, progressCallback, scryptParams,
     var passInt = BigInteger.fromBuffer(passFactor)
     var passPoint = curve.G.multiply(passInt).getEncoded(true)
 
-    scryptAsync(passPoint, Buffer.concat([addressHash, ownerEntropy]), 1024, 1, 1, 64, null, function(err, seedBPass) {
+    scrypt.scryptAsync(passPoint, Buffer.concat([addressHash, ownerEntropy]), 1024, 1, 1, 64, null, function(err, seedBPass) {
       if (err) {
     		doneCallback(err);
     		return;
